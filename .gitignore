@@ -72,3 +72,7 @@ venv/
 # Local AI models
 models/
 *.bin
+
+# Backend
+backend/node_modules/
+backend/dist/
