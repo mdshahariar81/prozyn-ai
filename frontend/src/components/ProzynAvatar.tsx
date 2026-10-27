@@ -95,7 +95,7 @@ function normalizePoints(source: Float32Array) {
   let maxZ = -Infinity;
 
   for (let i = 0; i < source.length; i += 3) {
-    const x = source[i];
+    let x = source[i];
     const y = source[i + 1];
     const z = source[i + 2];
 
@@ -134,6 +134,7 @@ function samplePointCloud(
   source: Float32Array,
   count: number,
   seed: number,
+  identity: Identity,
 ): PointData {
   const normalized = normalizePoints(source);
   const random = seededRandom(seed);
@@ -313,7 +314,7 @@ function samplePointCloud(
     const weightB = r1 * (1 - r2);
     const weightC = r1 * r2;
 
-    const x =
+    let x =
       ax * weightA +
       bx * weightB +
       cx * weightC;
@@ -323,10 +324,46 @@ function samplePointCloud(
       by * weightB +
       cy * weightC;
 
-    const z =
+    let z =
       az * weightA +
       bz * weightB +
       cz * weightC;
+
+    /*
+     * SARA gets a restrained feminine silhouette:
+     * slightly narrower shoulders and a softer neck width.
+     * This is intentionally subtle so the original facial
+     * geometry remains recognizable.
+     */
+    if (identity === "sara") {
+      const shoulderT =
+        1.0 -
+        THREE.MathUtils.smoothstep(
+          y,
+          -0.86,
+          -0.34,
+        );
+
+      const neckT =
+        THREE.MathUtils.smoothstep(
+          y,
+          -0.42,
+          0.02,
+        ) *
+        (1.0 -
+          THREE.MathUtils.smoothstep(
+            y,
+            0.02,
+            0.42,
+          ));
+
+      const feminineScale =
+        1.0 -
+        shoulderT * 0.085 -
+        neckT * 0.045;
+
+      x *= feminineScale;
+    }
 
     positions[i * 3] = x;
     positions[i * 3 + 1] = y;
@@ -464,64 +501,102 @@ function createProceduralHair(
 
     if (identity === "sara") {
       /*
-       * Main scalp volume.
+       * SARA: soft layered hair.
+       *
+       * Most particles form the scalp/crown. Additional particles
+       * create long side curtains and a subtle back layer so the
+       * silhouette reads as feminine even at a distance.
        */
       const angle =
         u * Math.PI * 2;
 
       const topBias =
-        Math.pow(v, 0.72);
+        Math.pow(v, 0.70);
 
       const radiusX =
-        0.30 +
-        topBias * 0.055;
+        0.285 +
+        topBias * 0.060;
 
       const radiusZ =
-        0.19 +
-        topBias * 0.045;
+        0.185 +
+        topBias * 0.050;
 
       x =
         Math.cos(angle) *
         radiusX *
-        (0.82 + w * 0.18);
+        (0.80 + w * 0.20);
 
       y =
-        0.72 +
-        topBias * 0.40;
+        0.70 +
+        topBias * 0.43;
 
       z =
         Math.sin(angle) *
         radiusZ *
-        (0.82 + w * 0.18);
+        (0.80 + w * 0.20);
 
       /*
-       * Add longer side sections.
+       * Long side curtains. Keep the front-center area open
+       * so the face remains clearly visible.
        */
-      if (u < 0.34) {
+      if (u < 0.30) {
         const side =
-          u < 0.17 ? -1 : 1;
+          u < 0.15 ? -1 : 1;
+
+        const strandT =
+          random();
 
         x =
           side *
           (
-            0.27 +
-            random() * 0.09
+            0.285 +
+            strandT * 0.085
           );
 
         y =
-          0.42 +
-          random() * 0.46;
+          -0.18 +
+          strandT * 1.02;
 
         z =
-          -0.015 +
-          random() * 0.16;
+          -0.045 +
+          random() * 0.13;
+
+        /*
+         * Slight inward taper near the lower ends.
+         */
+        x *=
+          0.94 +
+          0.06 *
+          THREE.MathUtils.smoothstep(
+            y,
+            -0.18,
+            0.82,
+          );
       }
 
       /*
-       * Keep the front of the face open.
+       * A small back curtain gives the hair volume without
+       * covering the face.
        */
-      if (z > 0.10) {
-        z -= 0.08;
+      if (u >= 0.30 && u < 0.43) {
+        x =
+          (random() - 0.5) *
+          0.62;
+
+        y =
+          -0.12 +
+          random() * 0.88;
+
+        z =
+          -0.18 -
+          random() * 0.07;
+      }
+
+      /*
+       * Open the front-facing facial area.
+       */
+      if (z > 0.085) {
+        z -= 0.11;
       }
     } else {
       /*
@@ -579,10 +654,11 @@ function createProceduralHair(
 
     brightness[i] =
       THREE.MathUtils.clamp(
-        0.10 +
-          random() * 0.12,
+        identity === "sara"
+          ? 0.14 + random() * 0.15
+          : 0.10 + random() * 0.12,
         0,
-        0.28,
+        identity === "sara" ? 0.34 : 0.28,
       );
   }
 
@@ -710,6 +786,7 @@ function createMorphData(
       saraSource,
       BODY_PARTICLE_COUNT,
       1127,
+      "sara",
     );
 
   const alexBody =
@@ -717,6 +794,7 @@ function createMorphData(
       alexSource,
       BODY_PARTICLE_COUNT,
       1127,
+      "alex",
     );
 
   const saraHair =
@@ -793,25 +871,68 @@ void main() {
    */
   float saraWeight = 1.0 - morph;
 
+  /*
+   * Give SARA a softer, more feminine silhouette:
+   * narrower shoulder line and a slightly slimmer neck.
+   */
+  float saraShoulder =
+    1.0 -
+    smoothstep(
+      -0.88,
+      -0.32,
+      position.y
+    );
+
+  float saraNeck =
+    smoothstep(
+      -0.42,
+      0.02,
+      position.y
+    ) *
+    (
+      1.0 -
+      smoothstep(
+        0.02,
+        0.42,
+        position.y
+      )
+    );
+
+  float saraBodyScale =
+    1.0 -
+    saraWeight *
+    (
+      saraShoulder * 0.075 +
+      saraNeck * 0.04
+    );
+
+  position.x *= saraBodyScale;
+
+  /*
+   * Procedural SARA hair silhouette.
+   *
+   * Hair extends below the jaw toward the shoulders while
+   * leaving the front facial surface open.
+   */
   float hairTop =
     smoothstep(
-      0.58,
-      0.92,
+      0.54,
+      0.90,
       position.y
     );
 
   float hairSide =
     smoothstep(
-      0.16,
-      0.34,
+      0.15,
+      0.31,
       abs(position.x)
     );
 
-  float hairLower =
+  float hairLength =
     1.0 -
     smoothstep(
-      -0.62,
-      0.18,
+      -0.30,
+      0.20,
       position.y
     );
 
@@ -819,15 +940,15 @@ void main() {
     saraWeight *
     clamp(
       hairTop * 0.72 +
-      hairSide * 0.42 +
-      hairLower * hairSide * 0.34,
+      hairSide * 0.48 +
+      hairLength * hairSide * 0.42,
       0.0,
       1.0
     );
 
   float hairNoise =
-    0.72 +
-    0.28 *
+    0.74 +
+    0.26 *
     sin(
       aSeed.x * 41.0 +
       aSeed.y * 17.0
@@ -836,19 +957,19 @@ void main() {
   position.x +=
     sign(position.x + 0.0001) *
     saraHair *
-    0.055 *
+    0.048 *
     hairNoise;
 
   position.z -=
     saraHair *
-    0.045 *
+    0.055 *
     hairNoise;
 
   position.y -=
-    hairLower *
+    hairLength *
     hairSide *
     saraWeight *
-    0.035;
+    0.025;
 
   /*
    * Particles travel outward during identity switching.
@@ -1139,7 +1260,7 @@ void main() {
     );
 
   gl_PointSize =
-    0.42 *
+    0.36 *
     faceParticleScale *
     featureParticleScale *
     (0.72 + vBrightness * 0.9) *
@@ -1184,10 +1305,10 @@ void main() {
   float alpha =
     softCircle *
     (
-      0.045 +
-      vBrightness * 0.31 +
-      vFace * 0.10 +
-      vFeature * 0.28
+      0.035 +
+      vBrightness * 0.27 +
+      vFace * 0.09 +
+      vFeature * 0.25
     );
 
   vec3 baseColor =
